@@ -1,0 +1,158 @@
+#!/bin/bash
+
+function _all_at_once() {
+    local PICK_BRANCHES="$1"
+    # Grab the mapping refs from the repo
+    echo "Grabbing mapping references from 'origin'"
+    sed -i '/+refs\/heads\/\*:refs\/remotes\/origin\/\*/a \
+        fetch = +refs/svn/*:refs/svn/*' .git/config
+    git fetch > /dev/null 2>&1
+    local move_rev base_path commit_time commit_msg last_commit svn_path svn_ref
+    read -p "Enter the revision # of the move (WITHOUT the r, e.g. 4457): " move_rev
+    read -p "Enter the git-formatted commit date-time of the SVN move: " commit_time
+    read -p "Enter the commit message (e.g. Move a/b to c/b): " commit_msg
+    read -p "Enter the relative path from SVN repo root to NEW folder with [trunk,tags,branches]: " base_path
+    base_path="${base_path%/}"
+    base_path="${base_path#/}"
+    # Get the most recent map commit...
+    local last_map_hash="$(git log refs/svn/map --format="%H" | head -1)"
+    # ... And the tree hash it refers to
+    local last_tree_hash="$(git log refs/svn/map --format="%T" | head -1)"
+
+    local branches=$(git branch -r | grep -v HEAD | sed 's|\s\+origin/\(.*\)|\1|')
+    for branch in $branches; do
+        if [ -n "$PICK_BRANCHES" ]; then
+            read -p "Sync branch $branch? [y/n] " do_this_branch
+            if [ "$do_this_branch" != "y" ]; then
+                echo "Skipping branch $branch"
+                continue
+            fi
+        fi
+
+        if [ "$branch" != "master" ]; then
+            git checkout --track "remotes/origin/$branch" > /dev/null 2>&1
+            svn_path="$base_path/branches/$branch"
+            svn_ref="refs/svn/root/branches/$branch"
+        else
+            git checkout master > /dev/null 2>&1
+            svn_path="$base_path/trunk"
+            svn_ref="refs/svn/root/trunk"
+        fi
+
+        # Step 1: Make blank commit + push
+        GIT_COMMITTER_DATE="$commit_time" git commit --date="$commit_time" --allow-empty -m "$commit_msg" >/dev/null
+        last_commit="$(git log $branch --format="%H" | head -1)"
+        git push origin "$branch" > /dev/null 2>&1
+
+        # Step 2: Make new map object
+        git checkout refs/svn/map > /dev/null 2>&1
+        local last_map_obj="$(echo -n "r$move_rev $svn_path" | git hash-object -w --stdin)"
+        
+        # Step 3: Make a new tree, using the last tree as a base
+        git read-tree "$last_tree_hash"
+        git update-index --add --cacheinfo 100644 "$last_map_obj" "$last_commit"
+        last_tree_hash="$(git write-tree)"
+
+        # Step 4: Make a map commit for the new tree, with the last map commit as parent
+        last_map_hash="$(echo -n "Translated-from: SVN"  | GIT_AUTHOR_DATE="$commit_time" GIT_COMMITTER_DATE="$commit_time" GIT_COMMITTER_NAME="subgit" GIT_COMMITTER_EMAIL="support@subgit.com" GIT_AUTHOR_NAME="subgit" GIT_AUTHOR_EMAIL="support@subgit.com" git commit-tree "$last_tree_hash" -p "$last_map_hash")"
+
+        # Step 5: Update svn branch ref
+        git update-ref "$svn_ref" "$last_commit"
+
+        echo "Synced branch $branch"
+
+    done
+
+    git checkout master > /dev/null 2>&1
+    git reset
+
+    git update-ref refs/svn/map "$last_map_hash"
+    git push origin 'refs/svn/*:refs/svn/*' > /dev/null 2>&1
+    echo "Synced subgit map references"
+    echo "You can now reconfigure subgit for syncing on the remote repo"
+
+}
+
+function _complex_remap() {
+    # Grab the mapping refs from the repo
+    echo "Grabbing mapping references from 'origin'"
+    sed -i '/+refs\/heads\/\*:refs\/remotes\/origin\/\*/a \
+        fetch = +refs/svn/*:refs/svn/*' .git/config
+    git fetch > /dev/null 2>&1
+    local move_rev base_path commit_time commit_msg last_commit svn_path svn_ref do_this_branch
+    read -p "Enter the revision # of the move (WITHOUT the r, e.g. 4457): " move_rev
+    read -p "Enter the git-formatted commit date-time of the SVN move: " commit_time
+    read -p "Enter the commit message (e.g. Move a/b to c/b): " commit_msg
+    # Get the most recent map commit...
+    local last_map_hash="$(git log refs/svn/map --format="%H" | head -1)"
+    # ... And the tree hash it refers to
+    local last_tree_hash="$(git log refs/svn/map --format="%T" | head -1)"
+
+    local branches=$(git branch -r | grep -v HEAD | sed 's|\s\+origin/\(.*\)|\1|')
+    for branch in $branches; do
+        read -p "Sync branch $branch? [y/n] " do_this_branch
+        if [ "$do_this_branch" != "y" ]; then
+            continue
+        fi
+
+        if [ "$branch" != "master" ]; then
+            git checkout --track "remotes/origin/$branch" > /dev/null 2>&1
+            read -p "Enter the relative path from SVN repo root to NEW folder '.../branches/$branch': " svn_path
+            svn_path="${svn_path%/}"
+            svn_path="${svn_path#/}"
+            read -p "Enter the relative path from subgit's root configuration to NEW folder: " ref_path
+            ref_path="${ref_path%/}"
+            ref_path="${ref_path#/}"
+            svn_ref="refs/svn/root/$ref_path"
+        else
+            git checkout master > /dev/null 2>&1
+            read -p "Enter the relative path from SVN repo root to NEW folder '.../trunk': " svn_path
+            svn_path="${svn_path%/}"
+            svn_path="${svn_path#/}"
+            read -p "Enter the relative path from subgit's root configuration to NEW folder: " ref_path
+            ref_path="${ref_path%/}"
+            ref_path="${ref_path#/}"
+            svn_ref="refs/svn/root/$ref_path"
+        fi
+
+        # Step 1: Make blank commit + push
+        GIT_COMMITTER_DATE="$commit_time" git commit --date="$commit_time" --allow-empty -m "$commit_msg" >/dev/null
+        last_commit="$(git log $branch --format="%H" | head -1)"
+        git push origin "$branch" > /dev/null 2>&1
+
+        # Step 2: Make new map object
+        git checkout refs/svn/map > /dev/null 2>&1
+        local last_map_obj="$(echo -n "r$move_rev $svn_path" | git hash-object -w --stdin)"
+        
+        # Step 3: Make a new tree, using the last tree as a base
+        git read-tree "$last_tree_hash"
+        git update-index --add --cacheinfo 100644 "$last_map_obj" "$last_commit"
+        last_tree_hash="$(git write-tree)"
+
+        # Step 4: Make a map commit for the new tree, with the last map commit as parent
+        last_map_hash="$(echo -n "Translated-from: SVN"  | GIT_AUTHOR_DATE="$commit_time" GIT_COMMITTER_DATE="$commit_time" GIT_COMMITTER_NAME="subgit" GIT_COMMITTER_EMAIL="support@subgit.com" GIT_AUTHOR_NAME="subgit" GIT_AUTHOR_EMAIL="support@subgit.com" git commit-tree "$last_tree_hash" -p "$last_map_hash")"
+
+        # Step 5: Update svn branch ref
+        git update-ref "$svn_ref" "$last_commit"
+
+        echo "Synced branch $branch"
+
+    done
+
+    git checkout master > /dev/null 2>&1
+    git reset
+
+    git update-ref refs/svn/map "$last_map_hash"
+    git push origin 'refs/svn/*:refs/svn/*' > /dev/null 2>&1
+    echo "Synced subgit map references"
+    echo "You can now reconfigure subgit for syncing on the remote repo"
+
+}
+
+if [ "$1" == "--pick" ]; then
+    _all_at_once "pick"
+elif [ "$1" == "--complex" ]; then
+    _complex_remap
+else
+    _all_at_once
+fi
