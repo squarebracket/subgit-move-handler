@@ -2,7 +2,7 @@
 
 This shell script will help you in restoring subgit to a usable state after an `svn move` operation.
 
-It works by applying empty commits to the git repo, and creates subgit mapping references for the svn operation. When subgit is then reinstalled to the git repo, it will think it is synchronized up until the move in SVN.
+It works by applying empty commits to the git repo, and creates subgit mapping references for the svn operation. When subgit is then reinstalled to the git repo, it will think it is synchronized up until the move in SVN, and any commits in SVN since the move will be replayed onto the git repo.
 
 This way you will get to maintain all of your `git log` data, there will just be an extra empty commit in the logs for the move. Hurray!
 
